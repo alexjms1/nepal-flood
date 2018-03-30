@@ -1,0 +1,1038 @@
+---
+title: "Nepal flood RCT analysis"
+output:
+  pdf_document: default
+  html_notebook: default
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{rotating}
+- \usepackage{longtable}
+- \usepackage{dcolumn}
+---
+
+```{r}
+melt_data_suffix <- function(var_name) {
+  new_var <- vector(mode = "numeric", length = nrow(data))
+  new_var[data$timePoint_factor == '1'] <- as.numeric(data[[paste0(var_name, '1')]][data$timePoint_factor == '1'])
+  new_var[data$timePoint_factor == '2'] <- as.numeric(data[[paste0(var_name, '2')]][data$timePoint_factor == '2'])
+  new_var[data$timePoint_factor == '3'] <- as.numeric(data[[paste0(var_name, '3')]][data$timePoint_factor == '3'])
+  return(new_var)
+}
+
+melt_data_prefix <- function(var_name) {
+  var_name <- substr(var_name, 3, nchar(var_name))
+  new_var <- vector(mode = "numeric", length = nrow(data))
+  new_var <- as.numeric(data[[paste0('T1', var_name)]])
+  new_var[data$timePoint_factor == '1'] <- as.numeric(data[[paste0('T1',var_name)]][data$timePoint_factor == '1'])
+  new_var[data$timePoint_factor == '2'] <- as.numeric(data[[paste0('T2',var_name)]][data$timePoint_factor == '2'])
+  new_var[data$timePoint_factor == '3'] <- as.numeric(data[[paste0('T3',var_name)]][data$timePoint_factor == '3'])
+  return(new_var)
+}
+
+reverse_melt <- function(data, var_name) {
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  return(data)
+}
+
+count_nas <- function(df, time) {
+  result <- sapply(df[data$timePoint_factor == as.character(time),], function(x) sum(is.na(x)))
+  return(result)
+}
+```
+
+```{r, message = FALSE, warnings = FALSE}
+library(haven)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(scales)
+library(lme4)
+library(lsmeans)
+library(car)
+library(RLRsim)
+library(stringr)
+library(lmerTest)
+library(ordinal)
+library(RVAideMemoire)
+library(magrittr)
+library(xtable)
+library(texreg)
+library(reporttools)
+setwd("C:/Users/ajame/Dropbox/Alex - Nepal/Flood data")
+data <- read_dta("NEPAL T1 T2 T3 partial reshape.dta")
+
+data$interventiongroup <- factor(data$interventiongroup, levels = levels(factor(data$interventiongroup))[c(2,1)], labels = c('Control', 'Intervention'))
+data$timePoint_factor <- factor(data$timePointZerod, labels = c('1','2','3'))
+#data$interventiongroup[data$timePoint_factor == '3'] <- 'Intervention'
+data$gender <- factor(data$T1gender, labels = c('Female','Male'))
+data$functioning <- data$FuncFmean6_T
+data$functioning[!is.na(data$FuncMmean6_T)] <- data$FuncMmean6_T[!is.na(data$FuncMmean6_T)]
+data$ID_factor <- factor(data$PartID)
+data$loc_factor <- factor(data$T1loccode)
+
+factor_dvs <- c('SelfEff1timeT', 'SelfEff2affordT', 'SelfEff3infoT', 'Fat1dontworryT', 'Fat2injuredT', 'DisMH1anxiousT', 'DisMH2depressedT', 'DisMH3avoidT', 'DisAt1NaturalT', 'DisAt2GodswillT', 'DisAt3OthersupernaT', 'DisAt4KarmaT', 'DisAt5NeppeopT', 'DisAt6GovtsT', 'Relig1PrivateactivT', 'Relig2PublicactivT', 'HGDis1WillinghelpT', 'HGDis2HelpaftermathT', 'HSMH2aComfortseekhelpfutureT', 'HSDis2ComfortseekinghelpT', 'HGMH2WillinghelpneighborT', 'HGMH3KnowhowhelpT', 'HGDis2WillinghelpT', 'HSMH2bGodsT', 'HSMH2bPriestT', 'HSMH2bNeighborsT', 'HSMH2bFamilyT', 'HSMH2bFriendsT', 'HSMH2bHospT', 'HSMH2bCBMHT', 'HSMH3FaultsadnessT', 'HSMH4CausesadnessGodT', 'HSMH4CausesadnessThinkingT', 'HSMH4CausesadnessCurseT', 'HSMH4CausesadnessTraumaStressT', 'HSMH4CausesadnessBrainT', 'HSMH4CausesadnessDeservedT', 'HSMH1aSeekhelplast6monthsT', 'HSMH1bGodsT', 'HSMH1bPriestT', 'HSMH1bNeighborsT', 'HSMH1bFamilyT', 'HSMH1bFriendsT', 'HSMH1bHospT', 'HSMH1bCBMHT', 'HSDis1Seekhelplast6monthsT',  'HGMH1Helpedsomeonelast6monthsT', 'HGDis1Helpedlast6monthsT')
+data %<>% mutate_at(factor_dvs, funs(factor(.))) 
+data$interventPlotting <- data$interventiongroup
+data$interventPlotting[data$interventiongroup=="Control" & data$timePoint_factor=='3'] <- 'Intervention'
+data$interventionLinePlotting <- data$interventPlotting
+data$interventionLinePlotting[data$interventiongroup=="Control" & data$timePoint_factor=='2'] <- 'Intervention'
+
+data$T1DP1Supplykit[is.na(data$T1DP1Supplykit)] <- mean(data$T1DP1Supplykit, na.rm = TRUE)
+data$T1DP3Meds[data$T1DP3Meds == 3] <- mean(data$T1DP3Meds[data$T1DP3Meds != 3], na.rm = TRUE)
+data$T2DP3Meds[data$T2DP3Meds == 3] <- mean(data$T2DP3Meds[data$T2DP3Meds != 3], na.rm = TRUE)
+data$T3DP3Meds[data$T3DP3Meds == 3] <- mean(data$T3DP3Meds[data$T3DP3Meds != 3], na.rm = TRUE)
+data$T1DP5Foodanimals[data$T1DP5Foodanimals == 3] <- mean(data$T1DP5Foodanimals[data$T1DP5Foodanimals != 3], na.rm = TRUE)
+data$T2DP5Foodanimals[data$T2DP5Foodanimals == 3] <- mean(data$T2DP5Foodanimals[data$T2DP5Foodanimals != 3], na.rm = TRUE)
+data$T3DP5Foodanimals[data$T3DP5Foodanimals == 3] <- mean(data$T3DP5Foodanimals[data$T3DP5Foodanimals != 3], na.rm = TRUE)
+data$T1DP15Talktochildren[data$T1DP15Talktochildren == 3] <- mean(data$T1DP15Talktochildren[data$T1DP15Talktochildren != 3], na.rm = TRUE)
+data$T2DP15Talktochildren[data$T2DP15Talktochildren == 3] <- mean(data$T2DP15Talktochildren[data$T2DP15Talktochildren != 3], na.rm = TRUE)
+data$T3DP15Talktochildren[data$T3DP15Talktochildren == 3] <- mean(data$T3DP15Talktochildren[data$T3DP15Talktochildren != 3], na.rm = TRUE)
+
+data %<>% mutate(
+  DP_cleaned_T1 = select(., T1DP1Supplykit, T1DP2Itemsinhouse, T1DP3Meds, T1DP4Foodpeople, 
+    T1DP5Foodanimals, T1DP6Docs, T1DP7Firewood, T1DP8Secureddwelling, T1DP9Raiseitems, 
+    T1DP10Divertwater, T1DP11Removeblowingobj, T1DP12Famemergplan, T1DP13Evacplan, 
+    T1DP14Reconnectfamplan, T1DP15Talktochildren, T1DP16RadioTVcomp, T1DP17Firstaid, 
+    T1DP18Cleanwater, T1DP19Disinfect, T1DP20Sanitation, T1DP21Safeplacewaterrise, 
+    T1DP22SafeplaceEQ, T1DP23Riskysafeplacemap, T1DP24Helpneighbors) %>% rowSums, 
+
+ DP_cleaned_T2 = select(., T2DP1Supplykit, T2DP2Itemsinhouse, T2DP3Meds, T2DP4Foodpeople, 
+    T2DP5Foodanimals, T2DP6Docs, T2DP7Firewood, T2DP8Secureddwelling, T2DP9Raiseitems, 
+    T2DP10Divertwater, T2DP11Removeblowingobj, T2DP12Famemergplan, T2DP13Evacplan, 
+    T2DP14Reconnectfamplan, T2DP15Talktochildren, T2DP16RadioTVcomp, T2DP17Firstaid, 
+    T2DP18Cleanwater, T2DP19Disinfect, T2DP20Sanitation, T2DP21Safeplacewaterrise, 
+    T2DP22SafeplaceEQ, T2DP23Riskysafeplacemap, T2DP24Helpneighbors) %>% rowSums,
+
+ DP_cleaned_T3 = select(., T3DP1Supplykit, T3DP2Itemsinhouse, T3DP3Meds, T3DP4Foodpeople, 
+    T3DP5Foodanimals, T3DP6Docs, T3DP7Firewood, T3DP8Secureddwelling, T3DP9Raiseitems, 
+    T3DP10Divertwater, T3DP11Removeblowingobj, T3DP12Famemergplan, T3DP13Evacplan, 
+    T3DP14Reconnectfamplan, T3DP15Talktochildren, T3DP16RadioTVcomp, T3DP17Firstaid, 
+    T3DP18Cleanwater, T3DP19Disinfect, T3DP20Sanitation, T3DP21Safeplacewaterrise, 
+    T3DP22SafeplaceEQ, T3DP23Riskysafeplacemap, T3DP24Helpneighbors) %>% rowSums
+ )
+
+data$DP_cleaned_T <- melt_data_suffix('DP_cleaned_T')
+to_reverse_melt <- c('BDImean16_T', 'BDIsumT', 'SocCohmean7_T', 'SocCohsum7_T', 'PTSDmean13_T', 'PTSDsumT', 'PTSD_avoid_T')
+for(i in to_reverse_melt) {
+  data %<>% reverse_melt(i)
+}
+
+filtered <- data %>% filter(!is.na(interventiongroup))
+#write_dta(filtered, 'C:/Users/ajame/Dropbox/Alex - Nepal/Flood data/Nepal RCT partial reshape DP cleaned.dta', version = 14)
+```
+
+First let's get descriptive statistics on disaster preparedness items.
+
+```{r}
+T1_DP_vars <- filtered %>% filter(timePoint_factor == "1") %>% dplyr::select(T1DP1Supplykit, T1DP2Itemsinhouse, T1DP3Meds, T1DP4Foodpeople, 
+    T1DP5Foodanimals, T1DP6Docs, T1DP7Firewood, T1DP8Secureddwelling, T1DP9Raiseitems, 
+    T1DP10Divertwater, T1DP11Removeblowingobj, T1DP12Famemergplan, T1DP13Evacplan, 
+    T1DP14Reconnectfamplan, T1DP15Talktochildren, T1DP16RadioTVcomp, T1DP17Firstaid, 
+    T1DP18Cleanwater, T1DP19Disinfect, T1DP20Sanitation, T1DP21Safeplacewaterrise, 
+    T1DP22SafeplaceEQ, T1DP23Riskysafeplacemap, T1DP24Helpneighbors, T1loccode)
+
+T2_DP_vars <- filtered %>% filter(timePoint_factor == "2") %>% dplyr::select(T2DP1Supplykit, T2DP2Itemsinhouse, T2DP3Meds, T2DP4Foodpeople, 
+    T2DP5Foodanimals, T2DP6Docs, T2DP7Firewood, T2DP8Secureddwelling, T2DP9Raiseitems, 
+    T2DP10Divertwater, T2DP11Removeblowingobj, T2DP12Famemergplan, T2DP13Evacplan, 
+    T2DP14Reconnectfamplan, T2DP15Talktochildren, T2DP16RadioTVcomp, T2DP17Firstaid, 
+    T2DP18Cleanwater, T2DP19Disinfect, T2DP20Sanitation, T2DP21Safeplacewaterrise, 
+    T2DP22SafeplaceEQ, T2DP23Riskysafeplacemap, T2DP24Helpneighbors)
+
+T3_DP_vars <- filtered %>% filter(timePoint_factor == "3") %>% dplyr::select(T3DP1Supplykit, T3DP2Itemsinhouse, T3DP3Meds, T3DP4Foodpeople, 
+    T3DP5Foodanimals, T3DP6Docs, T3DP7Firewood, T3DP8Secureddwelling, T3DP9Raiseitems, 
+    T3DP10Divertwater, T3DP11Removeblowingobj, T3DP12Famemergplan, T3DP13Evacplan, 
+    T3DP14Reconnectfamplan, T3DP15Talktochildren, T3DP16RadioTVcomp, T3DP17Firstaid, 
+    T3DP18Cleanwater, T3DP19Disinfect, T3DP20Sanitation, T3DP21Safeplacewaterrise, 
+    T3DP22SafeplaceEQ, T3DP23Riskysafeplacemap, T3DP24Helpneighbors)
+```
+
+First by time point then by community within time point 1.
+
+```{r, results = "asis"}
+tableNominal(vars = as.data.frame(dplyr::select(T1_DP_vars, -T1loccode)), lab = "tabdp1", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 1 questions")
+
+tableNominal(vars = as.data.frame(T2_DP_vars), lab = "tabdp2", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 2 questions")
+
+tableNominal(vars = as.data.frame(T3_DP_vars), lab = "tabdp3", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 3 questions")
+
+tableNominal(vars = as.data.frame(dplyr::select(T1_DP_vars, -T1loccode)), group = T1_DP_vars$T1loccode, lab = "tabdp1c1", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statsitics of disaster preparation behaviors time 1 questions by community")
+```
+
+Now let's perform a Cronbach's alpha analysis on disaster preparedness items - we can use the alphas if item is omitted to detect outliers.
+
+```{r alphas}
+
+psych::alpha(x = T1_DP_vars , cumulative = TRUE)
+
+psych::alpha(x = T2_DP_vars, cumulative = TRUE)
+
+psych::alpha(x = T3_DP_vars, cumulative = TRUE)
+
+```
+
+```{r fig_percent_yes}
+per_yes_T1 <-  t(summarise_all(T1_DP_vars, funs(sum(. == 1, na.rm = T) / (sum(. == 0, na.rm = T) + sum(. == 1, na.rm = T)))))
+per_yes_T2 <-  t(summarise_all(T2_DP_vars, funs(sum(. == 1, na.rm = T) / (sum(. == 0, na.rm = T) + sum(. == 1, na.rm = T)))))
+per_yes_T3 <-  t(summarise_all(T3_DP_vars, funs(sum(. == 1, na.rm = T) / (sum(. == 0, na.rm = T) + sum(. == 1, na.rm = T)))))
+per_yes_T1 <- data.frame(percent_yes = per_yes_T1[,1], question = row.names(per_yes_T1))
+per_yes_T2 <- data.frame(percent_yes = per_yes_T2[,1], question = row.names(per_yes_T2))
+per_yes_T3 <- data.frame(percent_yes = per_yes_T3[,1], question = row.names(per_yes_T3))
+
+ggplot(per_yes_T1, aes(x=reorder(question, percent_yes), y=percent_yes)) + geom_bar(stat = "identity") + geom_label(aes(x=reorder(question, percent_yes), y=percent_yes + .1, label=round(percent_yes,2)), size = 2, label.size = NA) +  labs(x="Question", y="Percent of yes responses", title = "Time point 1 disaster preparedness questions") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(per_yes_T2, aes(x=reorder(question, percent_yes), y=percent_yes)) + geom_bar(stat = "identity") + geom_label(aes(x=reorder(question, percent_yes), y=percent_yes + .1, label=round(percent_yes,2)), size = 2, label.size = NA) + labs(x="Question", y="Percent of yes responses", title = "Time point 2 disaster preparedness questions") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(per_yes_T3, aes(x=reorder(question, percent_yes), y=percent_yes)) + geom_bar(stat = "identity") + geom_label(aes(x=reorder(question, percent_yes), y=percent_yes + .1, label=round(percent_yes,2)), size = 2, label.size = NA) + labs(x="Question", y="Percent of yes responses", title = "Time point 3 disaster preparedness questions") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Many of the disaster preparation questions are answered 'yes' at an extremely high rate.  Let's make a new variable that includes only questions where less than 95% of respondants said yes at time 1.
+
+```{r}
+per_yes_T1$question <- as.character(per_yes_T1$question)
+vars_95_less <- per_yes_T1$question[per_yes_T1$percent_yes < .95]
+vars_95_less <- substr(vars_95_less, 3, nchar(vars_95_less))
+data %<>% mutate(DP_95_T1 = select(., paste0('T1', vars_95_less)) %>% rowSums, 
+
+                 DP_95_T2 = select(., paste0('T2', vars_95_less)) %>% rowSums,
+
+                 DP_95_T3 = select(., paste0('T3', vars_95_less)) %>% rowSums)
+
+data$DP_95_T <- melt_data_suffix('DP_95_T')
+
+filtered <- data %>% filter(!is.na(interventiongroup))
+write_dta(filtered, 'C:/Users/ajame/Dropbox/Alex - Nepal/Flood data/Nepal RCT partial reshape DP cleaned.dta', version = 14)
+```
+
+Having done that, we can ask whether disaster preparedness is correlated with our mental health measures (a primary assumption of the intervention).  We'll run it on the overall disaster preparedness measure and our cut-down version with only items with 95% or less 'yes' respondents.
+
+```{r}
+cor.test( ~ DP_cleaned_T  + BDImean16_T, data = filtered, subset = timePoint_factor == "1" )
+cor.test( ~ DP_cleaned_T  + PTSDmean13_T, data = filtered, subset = timePoint_factor == "1" )
+cor.test( ~ DP_95_T  + BDImean16_T, data = filtered, subset = timePoint_factor == "1" )
+cor.test( ~ DP_95_T  + PTSDmean13_T, data = filtered, subset = timePoint_factor == "1" )
+```
+
+Now we'll create a figure of disaster preparedness means + standard errors across intervention groups and time points.
+
+
+
+```{r cache = TRUE}
+plot_line_bar <- function(dv, limits, theme_style = theme_grey(), title = "", position=c(.8825, .25), by=.5, logit=FALSE, caption = "", rnge = c(0,0), save = FALSE) {
+ 
+
+  if(is.factor(filtered[[dv]])) {
+    filtered[[paste0(dv, '_numeric')]] <- as.numeric(filtered[[dv]])
+    dv <- paste0(dv, '_numeric')
+  }
+  
+  breaks <- seq(limits[1], limits[2], by=by)
+  wrap_113 <- wrap_format(113)
+  
+  line <- ggplot(filtered, aes_string(x="timePoint_factor", y=dv, group="interventiongroup", shape="interventPlotting")) +
+        stat_summary(geom="errorbar", fun.data=mean_se, fun.args=list(mult=1), width=.09, size=1, alpha=.8, aes(color=interventPlotting)) +
+        stat_summary(aes(color=interventionLinePlotting), geom="line", fun.y="mean", size=1, alpha=.8, linetype=1) +
+        stat_summary(geom="point", fun.y="mean", size=4, aes(color=interventPlotting))  +
+        coord_cartesian(ylim=limits) +
+        scale_shape_discrete("") +
+        scale_color_discrete("",labels=c('Control', 'Intervention')) + 
+        labs(color="Condition", shape="Condition", x="Time point", y=title, caption = wrap_113(sprintf(caption, rnge[1], rnge[2]))) +
+        theme_style +
+        theme(
+            legend.position=position, 
+            plot.caption=element_text(hjust=0),
+            legend.box.just="left",
+            legend.background = element_rect(color = "transparent", fill = "transparent"),
+            legend.key = element_rect(color = "transparent", fill = "transparent"),
+            legend.title = element_blank()
+        )   + guides(shape = guide_legend(override.aes = list(shape=c(19,17))),
+              colour = guide_legend(override.aes = list(linetype = c(1,1), shape=NA)))
+  line
+  if(save) {
+    ggsave(paste0(title, '.pdf'), device=cairo_pdf, width = 7.5, height = 5)
+  }
+  print(line)
+}
+```
+
+# ```{r}
+# limits <- c(18,20)
+# theme <- theme_minimal()
+# rnge <- range(filtered$DPsum21_T, na.rm = TRUE)
+# caption = "21-item yes/no scale (range %d - %d), with greater values indicating greater engagement in disaster preparation behaviors"
+# plot_line_bar("DPsum21_T", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .8), caption = caption, save = TRUE)
+# ```
+
+```{r}
+limits <- c(20, 23)
+theme <- theme_minimal()
+rnge <- round(range(filtered$DP_cleaned_T, na.rm = TRUE),0)
+caption = "24-item yes/no scale (range %d - %d), with greater values indicating greater engagement in disaster preparation behaviors"
+plot_line_bar("DP_cleaned_T", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .8), caption = caption, save = TRUE)
+```
+
+
+# ```{r, cache = TRUE} 
+# DP_model <- lmer(DPsum21_T ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+# summary(DP_model)
+# ```
+
+```{r, cache = TRUE} 
+DP_model <- lmer(DP_cleaned_T ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DP_model)
+```
+
+```{r, cache = TRUE}
+DP_95_model <- lmer(DP_95_T ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DP_95_model)
+
+limits <- c(10, 12)
+theme <- theme_minimal()
+rnge <- round(range(filtered$DP_95_T, na.rm = TRUE),0)
+caption = "13-item yes/no scale (range %d - %d), with greater values indicating greater engagement in disaster preparation behaviors"
+plot_line_bar("DP_95_T", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .9), caption = caption, save = TRUE)
+```
+
+
+```{r, cache = TRUE}
+BDI_model <- lmer(BDImean16_T ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(BDI_model)
+```
+
+
+
+```{r, cache = TRUE}
+self_eff_model <- lmer(selfeffmeanT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(self_eff_model)
+```
+
+```{r, cache = TRUE}
+SelfEff1timeT_model <- clmm(SelfEff1timeT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(SelfEff1timeT_model)
+```
+
+```{r, cache = TRUE}
+SelfEff2affordT_model <- clmm(SelfEff2affordT  ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(SelfEff2affordT_model)
+```
+
+```{r, cache = TRUE}
+SelfEff3infoT_model <- clmm(SelfEff3infoT  ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(SelfEff3infoT_model)
+```
+
+```{r, cache = TRUE}
+DISMHmeanT_model <- lmer(DISMHmeanT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DISMHmeanT_model)
+```
+
+
+```{r, cache = TRUE}
+DisMH1anxiousT_model <- clmm(DisMH1anxiousT   ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DisMH1anxiousT_model)
+```
+
+```{r, cache = TRUE}
+DisMH2depressedT_model  <- clmm(DisMH2depressedT    ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DisMH2depressedT_model)
+```
+
+```{r, cache = TRUE}
+DisMH3avoidT_model  <- clmm(DisMH3avoidT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DisMH3avoidT_model)
+```
+
+```{r, cache = TRUE}
+Fatalismmean_T_model <- lmer(Fatalismmean_T ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(Fatalismmean_T_model)
+```
+
+```{r, cache = TRUE}
+Fat1dontworryT_model  <- clmm(Fat1dontworryT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(Fat1dontworryT_model)
+
+```
+
+```{r, cache = TRUE}
+Fat2injuredT_model  <- clmm(Fat2injuredT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(Fat2injuredT_model)
+```
+
+```{r, cache = TRUE}
+DisAt1NaturalT_model  <- clmm(DisAt1NaturalT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DisAt1NaturalT_model)
+```
+
+```{r, cache = TRUE}
+DisAt2GodswillT_model  <- clmm(DisAt2GodswillT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DisAt2GodswillT_model)
+```
+
+```{r, cache = TRUE}
+DisAt3OthersupernaT_model  <- clmm(DisAt3OthersupernaT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DisAt3OthersupernaT_model)
+```
+
+```{r, cache = TRUE}
+     
+DisAt4KarmaT_model  <- clmm(DisAt4KarmaT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(DisAt4KarmaT_model)
+```
+
+```{r, cache = TRUE}
+DisAt5NeppeopT_model  <- clmm(DisAt5NeppeopT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DisAt5NeppeopT_model)
+```
+
+```{r, cache = TRUE}
+DisAt6GovtsT_model  <- clmm(DisAt6GovtsT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(DisAt6GovtsT_model)
+```
+
+```{r, cache = TRUE}
+Relig1PrivateactivT_model  <- clmm(Relig1PrivateactivT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(Relig1PrivateactivT_model)
+```
+
+```{r, cache = TRUE}
+Relig2PublicactivT_model  <- clmm(Relig2PublicactivT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(Relig2PublicactivT_model)
+```
+
+```{r, cache = TRUE}
+func_model <- lmer(functioning ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(func_model)
+```
+
+```{r, cache = TRUE}
+cope_model <- lmer(Copemean9_T ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(cope_model)
+```
+
+```{r, cache = TRUE}
+soc_coh_model <- lmer(SocCohmean7_T ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(soc_coh_model)
+```
+
+```{r, cache = TRUE}
+ptsd_model <- lmer(PTSDmean13_T ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(ptsd_model)
+```
+
+```{r, cache = TRUE}
+pmhp_model <- lmer(PMHPmean13_T ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(pmhp_model)
+```
+<!-- #```{r, cache = TRUE} -->
+<!-- #HGDis1WillinghelpT_model  <- clmm(HGDis1WillinghelpT  ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HGDis1WillinghelpT_model -->
+
+<!-- #``` -->
+<!-- #```{r, cache = TRUE} -->
+<!-- #HGDis2HelpaftermathT_model  <- clmm(HGDis2HelpaftermathT  ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HGDis2HelpaftermathT_model) -->
+<!-- #``` -->
+
+```{r, cache = TRUE}
+HSMH2aComfortseekhelpfutureT_model  <- clmm(HSMH2aComfortseekhelpfutureT  ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(HSMH2aComfortseekhelpfutureT_model)
+```
+
+```{r, cache = TRUE}
+HSDis2ComfortseekinghelpT_model  <- clmm(HSDis2ComfortseekinghelpT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(HSDis2ComfortseekinghelpT_model)
+```
+
+<!-- #```{r, cache = TRUE} -->
+<!-- #HGMH2WillinghelpneighborT_model  <- glmer(HGMH2WillinghelpneighborT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = #filtered, family = binomial(link = "logit")) -->
+<!-- #summary(HGMH2WillinghelpneighborT_model) -->
+<!-- #Anova(HGMH2WillinghelpneighborT_model, type = "III") -->
+<!-- #summary(rbind(pairs(lsmeans::lsmeans(HGMH2WillinghelpneighborT_model, ~ interventiongroup * timePoint_factor * gender), by = "timePoint_factor * gender"))[2])  -->
+<!-- #``` -->
+
+```{r, cache = TRUE}
+HGMH3KnowhowhelpT_model  <- glmer(HGMH3KnowhowhelpT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered, family = "binomial")
+summary(HGMH3KnowhowhelpT_model)
+```
+
+<!-- #```{r, cache = TRUE} -->
+<!-- #HGDis2WillinghelpT_model  <- clmm(HGDis2WillinghelpT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HGDis2WillinghelpT_model) -->
+<!-- #``` -->
+
+<!-- #```{r, cache = TRUE} -->
+<!-- #HSMH2bGodsT_model  <- clmm(HSMH2bGodsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HSMH2bGodsT_model) -->
+<!-- #``` -->
+
+<!-- ```{r, cache = TRUE} -->
+<!-- HSMH2bPriestT_model  <- clmm(HSMH2bPriestT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- summary(HSMH2bPriestT_model) -->
+<!-- ``` -->
+
+<!-- ```{r, cache = TRUE} -->
+<!-- HSMH2bNeighborsT_model  <- clmm(HSMH2bNeighborsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- summary(HSMH2bNeighborsT_model) -->
+<!-- ``` -->
+
+<!-- #```{r, cache = TRUE} -->
+<!-- #HSMH2bFamilyT_model  <- clmm(HSMH2bFamilyT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HSMH2bFamilyT_model) -->
+<!-- #``` -->
+<!-- #```{r, cache = TRUE} -->
+<!-- #HSMH2bFriendsT_model  <- clmm(HSMH2bFriendsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HSMH2bFriendsT_model) -->
+<!-- #``` -->
+<!-- #```{r, cache = TRUE} -->
+<!-- #HSMH2bHospT_model  <- clmm(HSMH2bHospT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HSMH2bHospT_model) -->
+<!-- #``` -->
+
+<!-- #```{r, cache = TRUE} -->
+<!-- #HSMH2bCBMHT_model  <- clmm(HSMH2bCBMHT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- #summary(HSMH2bCBMHT_model) -->
+<!-- #``` -->
+```{r, cache = TRUE}
+HSMH3FaultsadnessT_model  <- clmm(HSMH3FaultsadnessT  ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(HSMH3FaultsadnessT_model)
+```
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessGodT_model  <- clmm(HSMH4CausesadnessGodT,  ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessGodT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessThinkingT_model  <- clmm(HSMH4CausesadnessThinkingT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessThinkingT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessCurseT_model  <- clmm(HSMH4CausesadnessCurseT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessCurseT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessTraumaStressT_model  <- clmm(HSMH4CausesadnessTraumaStressT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessTraumaStressT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessBrainT_model  <- clmm(HSMH4CausesadnessBrainT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessBrainT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH4CausesadnessDeservedT_model  <- clmm(HSMH4CausesadnessDeservedT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH4CausesadnessDeservedT_model) -->
+<!-- # ``` -->
+```{r, cache = TRUE}
+HSMH1aSeekhelplast6monthsT_model  <- clmm(HSMH1aSeekhelplast6monthsT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(HSMH1aSeekhelplast6monthsT_model)
+```
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bGodsT_model  <- clmm(HSMH1bGodsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bGodsT_model) -->
+<!-- # ``` -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bPriestT_model  <- clmm(HSMH1bPriestT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bPriestT_model) -->
+<!-- # ``` -->
+<!-- #  -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bNeighborsT_model  <- clmm(HSMH1bNeighborsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bNeighborsT_model) -->
+<!-- # ``` -->
+
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bFamilyT_model  <- clmm(HSMH1bFamilyT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bFamilyT_model) -->
+<!-- # ``` -->
+<!-- #  -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bFriendsT_model  <- clmm(HSMH1bFriendsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bFriendsT_model) -->
+<!-- # ``` -->
+<!-- #  -->
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bHospT_model  <- clmm(HSMH1bHospT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bHospT_model) -->
+<!-- # ``` -->
+
+<!-- # ```{r, cache = TRUE} -->
+<!-- # HSMH1bCBMHT_model  <- clmm(HSMH1bCBMHT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered) -->
+<!-- # summary(HSMH1bCBMHT_model) -->
+<!-- # ``` -->
+
+```{r, cache = TRUE}
+HSDis1Seekhelplast6monthsT_model  <- clmm(HSDis1Seekhelplast6monthsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(HSDis1Seekhelplast6monthsT_model)
+```
+
+```{r, cache = TRUE}
+HGMH1Helpedsomeonelast6monthsT_model  <- clmm(HGMH1Helpedsomeonelast6monthsT ~ interventiongroup * timePoint_factor * gender + (1|ID_factor), data = filtered)
+summary(HGMH1Helpedsomeonelast6monthsT_model)
+```
+
+```{r, cache = TRUE}
+HGDis1Helpedlast6monthsT_model  <- clmm(HGDis1Helpedlast6monthsT ~ interventiongroup * timePoint_factor * gender + (1|loc_factor/ID_factor), data = filtered)
+summary(HGDis1Helpedlast6monthsT_model)
+```
+
+```{r models, cache = TRUE}
+models <- list(BDI_model, DP_model, DP_95_model, self_eff_model, SelfEff1timeT_model, SelfEff2affordT_model, SelfEff3infoT_model, DISMHmeanT_model, DisMH1anxiousT_model, DisMH2depressedT_model, DisMH3avoidT_model, Fatalismmean_T_model,  Fat1dontworryT_model, Fat2injuredT_model, DisAt1NaturalT_model, DisAt2GodswillT_model, DisAt3OthersupernaT_model, DisAt4KarmaT_model, DisAt5NeppeopT_model, DisAt6GovtsT_model, Relig1PrivateactivT_model, Relig2PublicactivT_model, func_model, cope_model, soc_coh_model, ptsd_model, pmhp_model,  HSMH2aComfortseekhelpfutureT_model, HSDis2ComfortseekinghelpT_model,  HGMH3KnowhowhelpT_model, HSMH3FaultsadnessT_model)
+
+models_t2t3_only <- list(HSMH1aSeekhelplast6monthsT_model,  HSDis1Seekhelplast6monthsT_model, HGMH1Helpedsomeonelast6monthsT_model, HGDis1Helpedlast6monthsT_model)
+
+dv_names <- c('BDI','Disaster preparation','Dis prep 95', 'Self efficacy','Self eff 1 - time', 'Self eff 2 - Afford', 'Self eff 3 - info', 'Disaster MH', 'Dis MH 1 - anxious', 'Dis MH 2 - depression', 'Dis MH 3 - avoid', 'Fatalism', "Fat 1 - don't worry", 'Fat 2 - injured', 'Dis attr - natural', "Dis attr - God's will", 'Dis attr - other supernat', 'Dis attr - karma', 'Dis attr - Neppeop', 'Dis attr - govts', 'Relig 1 - private activ', 'Relig 2 - public activ', 'Functioning - all', 'Coping', 'Social cohesion', 'PTSD', 'PMHP', 'HSMH2a - Comfort seek help future', 'HSDis2 - Comfort seeking help', 'HGMH3 - Know how help', 'HSMH3 - Faultsadness')
+dv_names_t2t3_only <- c('*HSMH1a - Seek help last 6 months', '*HSDis1 - Seek help last 6mo', '*HGMH1 - Helped someone last 6mo', '*HGDis1 - Helped last 6mo')
+
+all_models <- c(models, models_t2t3_only)
+all_dv_names <- c(dv_names, dv_names_t2t3_only)
+
+anovas <- lapply(all_models, function(x) Anova(x, type = "III"))
+anovas_df <- lapply(anovas, function(x) as.numeric(c(tail(x,1),x['gender',])))
+anovas_df <- data.frame(t(sapply(anovas_df, `[`)), row.names = all_dv_names)
+names(anovas_df) <- c('tme.int.gen.chisq', 'tme.int.gen.df', 'tme.int.gen.p', 'genr.chisq', 'gen.df','gen.p')
+anovas_df %<>% select(-gen.df)
+
+mmeans_df <- lapply(models, function(x) as.numeric(summary(pairs(lsmeans::lsmeans(x, ~ gender, at=list(timePoint_factor = "1"))), type = "response"))[-1])
+mmeans_df <-  data.frame(t(sapply(mmeans_df, `[`)), row.names = dv_names)
+names(mmeans_df) <- c('Female-Male', 'se', 'df', 't.stat','p.val')
+
+coefs_int_time_t2_df <- data.frame(row.names = dv_names, 
+                      Coefficient = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',1]),
+                      'Std error' = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',2]), 
+                      'P value' = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',ncol(coef(summary(x)))]))
+
+
+coefs_int_time_t2t3_only_df <- data.frame(row.names = dv_names_t2t3_only, 
+                           Coefficient = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',1]),
+                           'Std error' = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',2]), 
+                           'P value' = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',ncol(coef(summary(x)))]))
+
+d_int_time_t2 <- vector(mode="numeric", length=nrow(coefs_int_time_t2_df))
+for(i in 1:nrow(coefs_int_time_t2_df)){
+  if(class(models[[i]]) == "merModLmerTest") {
+    y <- getME(models[[i]], name = 'y')
+    X <- getME(models[[i]], name = 'X')
+    d_int_time_t2[i] <- coefs_int_time_t2_df$Coefficient[i] / sd(y[X[,'timePoint_factor2'] == 0 & X[,'timePoint_factor3'] == 0])
+  }
+  else {
+    d_int_time_t2[i] <- NA
+  }
+}
+
+d_int_time_t2t3 <- vector(mode = "numeric", length = nrow(coefs_int_time_t2t3_only_df))
+
+for(i in 1:nrow(coefs_int_time_t2t3_only_df)){
+  if(class(models_t2t3_only[[i]]) == "merModLmerTest") {
+    y <- getME(models_t2t3_only[[i]], name = 'y')
+    X <- getME(models_t2t3_only[[i]], name = 'X')
+    d_int_time_t2t3[i] <- coefs_int_time_t2t3_only_df$Coefficient[i] / sd(y[X[,'timePoint_factor3'] == 0])
+  }
+  else {
+    d_int_time_t2t3[i] <- NA
+  }
+}
+coefs_int_time_t2_df[,'Cohens d'] <- d_int_time_t2
+coefs_int_time_t2t3_only_df[,'Cohens d'] <- d_int_time_t2t3
+coefs_int_time_t2_df <- rbind(coefs_int_time_t2_df, coefs_int_time_t2t3_only_df)
+
+coefs_int_time_t3_df <- data.frame(row.names = all_dv_names, 
+                                   Coefficient = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',1]), 
+                                   'Std error' = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',2]),
+                                   'P value' = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3', ncol(coef(summary(x)))]))
+
+models_int_time_df <- data.frame(row.names = all_dv_names, 'Time 1 vs 2' = coefs_int_time_t2_df$Coefficient, 'Std error' = coefs_int_time_t2_df$Std.error, 'P value' = coefs_int_time_t2_df$P.value, 'Cohens d' = coefs_int_time_t2_df$`Cohens d`,'Time 1 vs 3' = coefs_int_time_t3_df$Coefficient, 'Std error' = coefs_int_time_t3_df$Std.error, 'P value' = coefs_int_time_t3_df$P.value)
+
+models_int_time_df[dv_names_t2t3_only, 1:3] <- NA
+```
+
+```{r, cache = TRUE}
+coefs_int_time_gender_t2_df <- data.frame(row.names = dv_names,
+                                          Coefficient = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2:genderMale',1]),
+                                          'Std error' = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2:genderMale',2]),
+                                          'P value' = sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2:genderMale', ncol(coef(summary(x)))]))
+
+
+coefs_int_time_gender_t2t3_only_df <- data.frame(row.names = dv_names_t2t3_only, 
+                           Coefficient = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale',1]),
+                           'Std error' = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale',2]), 
+                           'P value' = sapply(models_t2t3_only, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale',ncol(coef(summary(x)))]))
+
+d_int_time_gender_t2 <- vector(mode="numeric", length=nrow(coefs_int_time_gender_t2_df))
+
+for(i in 1:nrow(coefs_int_time_gender_t2_df)){
+  if(class(models[[i]]) == "merModLmerTest") {
+    y <- getME(models[[i]], name = 'y')
+    X <- getME(models[[i]], name = 'X')
+    d_int_time_gender_t2[i] <- coefs_int_time_gender_t2_df$Coefficient[i] / sd(y[X[,'timePoint_factor2'] == 0 & X[,'timePoint_factor3'] == 0])
+  }
+  else {
+    d_int_time_gender_t2[i] <- NA
+  }
+}
+
+d_int_time_gender_t2t3 <- vector(mode = "numeric", length = nrow(coefs_int_time_gender_t2t3_only_df))
+
+for(i in 1:nrow(coefs_int_time_gender_t2t3_only_df)){
+  if(class(models_t2t3_only[[i]]) == "merModLmerTest") {
+    y <- getME(models_t2t3_only[[i]], name = 'y')
+    X <- getME(models_t2t3_only[[i]], name = 'X')
+    d_int_time_gender_t2t3[i] <- coefs_int_time_gender_t2t3_only_df$Coefficient[i] / sd(y[X[,'timePoint_factor3'] == 0])
+  }
+  else {
+    d_int_time_gender_t2t3[i] <- NA
+  }
+}
+
+coefs_int_time_gender_t2_df[,'Cohens d'] <- d_int_time_gender_t2
+coefs_int_time_gender_t2t3_only_df[,'Cohens d'] <- d_int_time_gender_t2t3
+coefs_int_time_gender_t2_df <- rbind(coefs_int_time_gender_t2_df, coefs_int_time_gender_t2t3_only_df)
+
+coefs_int_time_gender_t3_df <- data.frame(row.names = all_dv_names, 
+                                   Coefficient = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale',1]), 
+                                   'Std error' = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale',2]),
+                                   'P value' = sapply(all_models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3:genderMale', ncol(coef(summary(x)))]))
+
+models_coef_int_time_gender_df <- data.frame(row.names = all_dv_names, 'Time 1 vs 2' = coefs_int_time_gender_t2_df$Coefficient, 'Std error' = coefs_int_time_gender_t2_df$Std.error, 'P value' = coefs_int_time_gender_t2_df$P.value, 'Cohens d' = coefs_int_time_gender_t2_df$`Cohens d`, 'Time 1 vs 3' = coefs_int_time_gender_t3_df$Coefficient, 'Std error' = coefs_int_time_gender_t3_df$Std.error, 'P value' = coefs_int_time_gender_t3_df$P.value)
+
+models_coef_int_time_gender_df[dv_names_t2t3_only, 1:3] <- NA
+```
+
+
+```{r, results = "asis"}
+print(xtable(mmeans_df, "Marginal contrasts for females - males at time 1", auto = TRUE, digits = c(2,2,2,0,2,4), type = "latex"))
+print(xtable(anovas_df, "ANOVA results for time x intervention x gender and gender main effects", auto = TRUE, digits = c(2,2,0,4,2,4), type = "latex"))
+print(xtable(models_int_time_df, auto = TRUE, caption = "Coefficients are intervention x time point = 2 and intervention x time point = 3 effects.  Asterixes indicate data collected at times 2 and 3 only (coefficient is time 2 vs 3 x group interaction)", digits =  c(2,2,2,4,2, 2, 2, 4)), type = "latex")
+print(xtable(models_coef_int_time_gender_df, auto = TRUE, caption = "Coefficients are intervention x gender x time point = 2 and intervention x gender x time point = 3 effects.  Asterixes indicate data collected at times 2 and 3 only (coefficient is time 2 vs 3 x group interaction)", digits =  c(2,2,2,4,2, 2, 2, 4)), type = "latex")
+```
+```{r}
+contrasts <- data.frame()
+for(mod in models) {
+  MM <- lsmeans::lsmeans(mod, ~ timePoint_factor * interventiongroup)
+  contrast_result <- summary(rbind(pairs(MM, by="interventiongroup")[5]), type = "response")
+  if(dim(contrasts)[1] == 0) {
+    contrasts <- contrast_result
+  }
+  else {
+    contrasts <- rbind(contrasts, setNames(contrast_result, names(contrasts)))
+  }
+}
+row.names(contrasts) <- dv_names
+
+```
+
+```{r, results = "asis"}
+print(xtable(cbind(dv_names, contrasts)[,2:ncol(contrasts)+1], auto = TRUE, caption = "Within subject contrasts for time 1 to 3 for intervention group", digits =  c(1,1,2,2,2,2,3)), type = "latex")
+```
+
+```{r}
+contrasts <- data.frame()
+for(mod in models) {
+  MM <- lsmeans::lsmeans(mod, ~ timePoint_factor * interventiongroup)
+  contrast_result <- summary(rbind(pairs(MM, by="interventiongroup")[3]), type = "response")
+  if(dim(contrasts)[1] == 0) {
+    contrasts <- contrast_result
+  }
+  else {
+    contrasts <- rbind(contrasts, setNames(contrast_result, names(contrasts)))
+  }
+}
+row.names(contrasts) <- dv_names
+
+```
+
+```{r, results = "asis"}
+print(xtable(cbind(dv_names, contrasts)[,2:ncol(contrasts)+1], auto = TRUE, caption = "Within subject contrasts for time 2 to 3 for control group", digits =  c(1,1,2,2,2,2,3)), type = "latex")
+```
+
+```{r, results = "asis"}
+
+texreg(all_models, type = "html",  digits = 3, bold = .05, booktabs = TRUE, sideways = TRUE, use.packages = FALSE, single.row = FALSE, custom.model.names = all_dv_names, leading.zero = TRUE, stars = c(0.05, 0.01, 0.001), custom.note = "* $p < 0.05$, ** $p < 0.01$, *** $p < 0.001$. Coefficients with $p < 0.05$ in \\textbf{bold}.  Results are presented as coefficient (standard error).",  include.aic = FALSE, include.bic = TRUE, include.dic = FALSE, include.loglik = FALSE, include.nobs = FALSE, include.groups = FALSE, include.variance = FALSE, custom.coef.map = list( 'timePoint_factor2' = 'Time point = 2', 'timePoint_factor3' = 'Time point = 3', 'interventiongroupIntervention' = 'Intervention', 'genderMale' = 'Gender (male)', 'interventiongroupIntervention:timePoint_factor2' = 'Intervention x Time = 2', 'interventiongroupIntervention:timePoint_factor3' = 'Intervention x Time = 3', 'interventiongroupIntervention:genderMale' = 'Intervention x Gender (male)', 'timePoint_factor2:genderMale' = 'Gender (male) x Time = 2', 'timePoint_factor3:genderMale' = 'Gender (male) x Time = 3',  'interventiongroupIntervention:timePoint_factor2:genderMale' = 'Intervention x Gender (male) x Time = 2', 'interventiongroupIntervention:timePoint_factor3:genderMale' = 'Intervention x Gender (male) x Time = 3'))
+
+```
+
+Let's generate descriptive stats for the mental health variables.
+
+<!-- #```{r, results = "asis"} -->
+<!-- # vars <- filtered %>% select(BDImean16_T, PTSDmean13_T, functioning, DisMH1anxiousT, DisMH2depressedT, DisMH3avoidT, timePoint) -->
+<!-- # vars %<>% rename(Time = timePoint) -->
+<!-- # tableContinuous(vars = list(vars$BDImean16_T, vars$PTSDmean13_T, vars$functioning, as.numeric(vars$DisMH1anxiousT), as.numeric(vars$DisMH2depressedT), as.numeric(vars$DisMH3avoidT)), group = vars$Time, stats = c('n', 'min', 'q1', 'median', 'mean', 'q3', 'max'), cap = "Descriptive statistics" , nams = c('BDI', 'PTSD', 'Functioning', 'Dis MH - anxious', 'Dis MH - depressed', 'Dis MH - avoid'), prec = 2) -->
+<!-- #``` -->
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 13:54:49 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Time point} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+BDI & 1 &  370 & 1 & 1.29 & 1.52 & 1.61 & 1.89 & 3.10 \\ 
+   & 2 &  341 & 1 & 1.19 & 1.48 & 1.56 & 1.86 & 3.52 \\ 
+   & 3 &  371 & 1 & 1.10 & 1.33 & 1.43 & 1.67 & 3.14 \\ 
+   \hline
+ & all &  & 1 & 1.19 & 1.48 & 1.53 & 1.81 & 3.52 \\ 
+   \hline
+PTSD & 1 &  370 & 1 & 1.24 & 1.76 & 1.88 & 2.40 & 4.35 \\ 
+   & 2 &  341 & 1 & 1.12 & 1.47 & 1.71 & 2.06 & 4.53 \\ 
+   & 3 &  371 & 1 & 1.06 & 1.29 & 1.47 & 1.71 & 4.18 \\ 
+   \hline
+ & all &  & 1 & 1.12 & 1.47 & 1.69 & 2.06 & 4.53 \\ 
+   \hline
+Functioning & 1 &  366 & 1 & 1.00 & 1.11 & 1.33 & 1.56 & 3.67 \\ 
+   & 2 &  341 & 1 & 1.00 & 1.11 & 1.34 & 1.56 & 3.00 \\ 
+   & 3 &  371 & 1 & 1.00 & 1.11 & 1.24 & 1.33 & 2.67 \\ 
+   \hline
+ & all &  & 1 & 1.00 & 1.11 & 1.30 & 1.44 & 3.67 \\ 
+   \hline
+Dis MH - anxious & 1 &  370 & 1 & 4.00 & 4.00 & 3.83 & 4.00 & 5.00 \\ 
+   & 2 &  341 & 1 & 2.00 & 3.00 & 3.18 & 4.00 & 5.00 \\ 
+   & 3 &  371 & 1 & 2.00 & 3.00 & 2.95 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 4.00 & 3.33 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - depressed & 1 &  369 & 1 & 3.00 & 4.00 & 3.39 & 4.00 & 5.00 \\ 
+   & 2 &  341 & 1 & 2.00 & 3.00 & 2.96 & 4.00 & 5.00 \\ 
+   & 3 &  370 & 1 & 2.00 & 2.00 & 2.62 & 3.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 2.99 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - avoid & 1 &  370 & 1 & 2.00 & 2.00 & 2.24 & 3.00 & 5.00 \\ 
+   & 2 &  341 & 1 & 2.00 & 2.00 & 2.25 & 3.00 & 5.00 \\ 
+   & 3 &  371 & 1 & 2.00 & 2.00 & 2.14 & 2.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.21 & 3.00 & 5.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics} 
+\label{}
+\end{longtable}
+\endgroup
+
+
+
+Next the data by location across all time points.
+
+<!-- # ```{r, results = "asis"} -->
+<!-- # vars <- filtered %>% select(BDImean16_T, PTSDmean13_T, functioning, DisMH1anxiousT, DisMH2depressedT, DisMH3avoidT, T1loccode) -->
+<!-- # vars %<>% rename(Location = T1loccode) -->
+<!-- # tableContinuous(vars = list(vars$BDImean16_T, vars$PTSDmean13_T, vars$functioning, as.numeric(vars$DisMH1anxiousT), as.numeric(vars$DisMH2depressedT), as.numeric(vars$DisMH3avoidT)), group = vars$Location, stats = c('n', 'min', 'q1', 'median', 'mean', 'q3', 'max'), cap = "Descriptive statistics by location" , nams = c('BDI', 'PTSD', 'Functioning', 'Dis MH - anxious', 'Dis MH - depressed', 'Dis MH - avoid'), prec = 2) -->
+<!-- # ``` -->
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 14:10:22 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Location} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+BDI & 1 &  347 & 1 & 1.19 & 1.43 & 1.51 & 1.71 & 3.52 \\ 
+   & 2 &  374 & 1 & 1.19 & 1.43 & 1.52 & 1.81 & 2.95 \\ 
+   & 3 &  361 & 1 & 1.14 & 1.48 & 1.57 & 1.86 & 3.19 \\ 
+   \hline
+ & all &  & 1 & 1.19 & 1.48 & 1.53 & 1.81 & 3.52 \\ 
+   \hline
+PTSD & 1 &  347 & 1 & 1.12 & 1.53 & 1.70 & 2.06 & 4.47 \\ 
+   & 2 &  374 & 1 & 1.12 & 1.41 & 1.68 & 2.10 & 4.53 \\ 
+   & 3 &  361 & 1 & 1.12 & 1.47 & 1.69 & 2.00 & 4.06 \\ 
+   \hline
+ & all &  & 1 & 1.12 & 1.47 & 1.69 & 2.06 & 4.53 \\ 
+   \hline
+Functioning & 1 &  346 & 1 & 1.00 & 1.11 & 1.30 & 1.44 & 3.67 \\ 
+   & 2 &  373 & 1 & 1.00 & 1.11 & 1.26 & 1.33 & 3.22 \\ 
+   & 3 &  359 & 1 & 1.00 & 1.11 & 1.34 & 1.56 & 3.11 \\ 
+   \hline
+ & all &  & 1 & 1.00 & 1.11 & 1.30 & 1.44 & 3.67 \\ 
+   \hline
+Dis MH - anxious & 1 &  347 & 1 & 2.00 & 3.00 & 3.33 & 4.00 & 5.00 \\ 
+   & 2 &  374 & 1 & 3.00 & 4.00 & 3.32 & 4.00 & 5.00 \\ 
+   & 3 &  361 & 1 & 2.00 & 4.00 & 3.34 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 4.00 & 3.33 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - depressed & 1 &  346 & 1 & 2.00 & 3.00 & 2.97 & 4.00 & 5.00 \\ 
+   & 2 &  374 & 1 & 2.00 & 3.00 & 3.00 & 4.00 & 5.00 \\ 
+   & 3 &  360 & 1 & 2.00 & 3.00 & 3.01 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 2.99 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - avoid & 1 &  347 & 1 & 2.00 & 2.00 & 2.27 & 3.00 & 5.00 \\ 
+   & 2 &  374 & 1 & 2.00 & 2.00 & 2.26 & 3.00 & 5.00 \\ 
+   & 3 &  361 & 1 & 2.00 & 2.00 & 2.10 & 2.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.21 & 3.00 & 5.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics by location} 
+\label{}
+\end{longtable}
+\endgroup
+
+
+Next tables for each of the time points, broken down by location (city)
+
+<!-- # ```{r, results = "asis"} -->
+<!-- # vars <- filtered %>% filter(timePoint_factor == '1') %>% select(BDImean16_T, PTSDmean13_T, functioning, DisMH1anxiousT, DisMH2depressedT, DisMH3avoidT, T1loccode) -->
+<!-- # vars %<>% rename(Location = T1loccode) -->
+<!-- # tableContinuous(vars = list(vars$BDImean16_T, vars$PTSDmean13_T, vars$functioning, as.numeric(vars$DisMH1anxiousT), as.numeric(vars$DisMH2depressedT), as.numeric(vars$DisMH3avoidT)), group = vars$Location, stats = c('n', 'min', 'q1', 'median', 'mean', 'q3', 'max'), cap = "Descriptive statistics for time point 1 by location" , nams = c('BDI', 'PTSD', 'Functioning', 'Dis MH - anxious', 'Dis MH - depressed', 'Dis MH - avoid'), prec = 2) -->
+<!-- # ``` -->
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 14:06:08 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Location} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+BDI & 1 & 117 & 1 & 1.29 & 1.52 & 1.61 & 1.90 & 2.90 \\ 
+   & 2 & 129 & 1 & 1.29 & 1.52 & 1.59 & 1.86 & 2.95 \\ 
+   & 3 & 124 & 1 & 1.24 & 1.57 & 1.63 & 1.95 & 3.10 \\ 
+   \hline
+ & all &  & 1 & 1.29 & 1.52 & 1.61 & 1.89 & 3.10 \\ 
+   \hline
+PTSD & 1 & 117 & 1 & 1.24 & 1.82 & 1.97 & 2.47 & 3.88 \\ 
+   & 2 & 129 & 1 & 1.18 & 1.62 & 1.82 & 2.29 & 4.35 \\ 
+   & 3 & 124 & 1 & 1.29 & 1.74 & 1.87 & 2.24 & 4.00 \\ 
+   \hline
+ & all &  & 1 & 1.24 & 1.76 & 1.88 & 2.40 & 4.35 \\ 
+   \hline
+Functioning & 1 & 116 & 1 & 1.00 & 1.22 & 1.37 & 1.67 & 3.67 \\ 
+   & 2 & 128 & 1 & 1.00 & 1.11 & 1.26 & 1.44 & 3.22 \\ 
+   & 3 & 122 & 1 & 1.00 & 1.11 & 1.36 & 1.56 & 3.11 \\ 
+   \hline
+ & all &  & 1 & 1.00 & 1.11 & 1.33 & 1.56 & 3.67 \\ 
+   \hline
+Dis MH - anxious & 1 & 117 & 2 & 3.00 & 4.00 & 3.82 & 4.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 4.00 & 4.00 & 3.85 & 4.00 & 5.00 \\ 
+   & 3 & 124 & 1 & 4.00 & 4.00 & 3.81 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 4.00 & 4.00 & 3.83 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - depressed & 1 & 116 & 1 & 3.00 & 3.00 & 3.34 & 4.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 3.00 & 4.00 & 3.40 & 4.00 & 5.00 \\ 
+   & 3 & 124 & 1 & 3.00 & 4.00 & 3.44 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 3.00 & 4.00 & 3.39 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - avoid & 1 & 117 & 1 & 2.00 & 2.00 & 2.45 & 3.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 2.00 & 2.00 & 2.16 & 3.00 & 5.00 \\ 
+   & 3 & 124 & 1 & 2.00 & 2.00 & 2.13 & 2.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.24 & 3.00 & 5.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics for time point 1 by location} 
+\label{}
+\end{longtable}
+\endgroup
+
+<!-- # ```{r, results = "asis"} -->
+<!-- # vars <- filtered %>% filter(timePoint_factor == '2') %>% select(BDImean16_T, PTSDmean13_T, functioning, DisMH1anxiousT, DisMH2depressedT, DisMH3avoidT, T1loccode) -->
+<!-- # vars %<>% rename(Location = T1loccode) -->
+<!-- # tableContinuous(vars = list(vars$BDImean16_T, vars$PTSDmean13_T, vars$functioning, as.numeric(vars$DisMH1anxiousT), as.numeric(vars$DisMH2depressedT), as.numeric(vars$DisMH3avoidT)), group = vars$Location, stats = c('n', 'min', 'q1', 'median', 'mean', 'q3', 'max'), cap = "Descriptive statistics for time point 2 by location" , nams = c('BDI', 'PTSD', 'Functioning', 'Dis MH - anxious', 'Dis MH - depressed', 'Dis MH - avoid'), prec = 2) -->
+<!-- # ``` -->
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 14:04:55 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Location} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+BDI & 1 & 112 & 1 & 1.14 & 1.43 & 1.52 & 1.71 & 3.52 \\ 
+   & 2 & 116 & 1 & 1.24 & 1.52 & 1.58 & 1.86 & 2.71 \\ 
+   & 3 & 113 & 1 & 1.19 & 1.48 & 1.59 & 1.90 & 3.19 \\ 
+   \hline
+ & all &  & 1 & 1.19 & 1.48 & 1.56 & 1.86 & 3.52 \\ 
+   \hline
+PTSD & 1 & 112 & 1 & 1.12 & 1.47 & 1.64 & 1.94 & 4.47 \\ 
+   & 2 & 116 & 1 & 1.18 & 1.56 & 1.77 & 2.18 & 4.53 \\ 
+   & 3 & 113 & 1 & 1.12 & 1.47 & 1.70 & 2.12 & 3.65 \\ 
+   \hline
+ & all &  & 1 & 1.12 & 1.47 & 1.71 & 2.06 & 4.53 \\ 
+   \hline
+Functioning & 1 & 112 & 1 & 1.00 & 1.22 & 1.32 & 1.44 & 2.89 \\ 
+   & 2 & 116 & 1 & 1.00 & 1.11 & 1.31 & 1.44 & 3.00 \\ 
+   & 3 & 113 & 1 & 1.00 & 1.22 & 1.38 & 1.67 & 2.89 \\ 
+   \hline
+ & all &  & 1 & 1.00 & 1.11 & 1.34 & 1.56 & 3.00 \\ 
+   \hline
+Dis MH - anxious & 1 & 112 & 2 & 2.00 & 3.00 & 3.22 & 4.00 & 5.00 \\ 
+   & 2 & 116 & 1 & 2.00 & 3.00 & 3.11 & 4.00 & 5.00 \\ 
+   & 3 & 113 & 1 & 2.00 & 3.00 & 3.22 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 3.18 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - depressed & 1 & 112 & 1 & 2.00 & 3.00 & 2.97 & 4.00 & 5.00 \\ 
+   & 2 & 116 & 1 & 2.00 & 3.00 & 3.00 & 4.00 & 5.00 \\ 
+   & 3 & 113 & 1 & 2.00 & 3.00 & 2.89 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 2.96 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - avoid & 1 & 112 & 1 & 2.00 & 2.00 & 2.22 & 3.00 & 5.00 \\ 
+   & 2 & 116 & 1 & 2.00 & 2.00 & 2.39 & 3.00 & 5.00 \\ 
+   & 3 & 113 & 1 & 2.00 & 2.00 & 2.14 & 2.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.25 & 3.00 & 5.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics for time point 2 by location} 
+\label{}
+\end{longtable}
+\endgroup
+
+
+<!-- # ```{r, results = "asis"} -->
+<!-- # vars <- filtered %>% filter(timePoint_factor == '3') %>% select(BDImean16_T, PTSDmean13_T, functioning, DisMH1anxiousT, DisMH2depressedT, DisMH3avoidT, T1loccode) -->
+<!-- # vars %<>% rename(Location = T1loccode) -->
+<!-- # tableContinuous(vars = list(vars$BDImean16_T, vars$PTSDmean13_T, vars$functioning, as.numeric(vars$DisMH1anxiousT), as.numeric(vars$DisMH2depressedT), as.numeric(vars$DisMH3avoidT)), group = vars$Location, stats = c('n', 'min', 'q1', 'median', 'mean', 'q3', 'max'), cap = "Descriptive statistics for time point 3 by location" , nams = c('BDI', 'PTSD', 'Functioning', 'Dis MH - anxious', 'Dis MH - depressed', 'Dis MH - avoid'), prec = 2) -->
+<!-- # ``` -->
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 14:05:02 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Location} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+BDI & 1 & 118 & 1 & 1.14 & 1.36 & 1.41 & 1.62 & 2.81 \\ 
+   & 2 & 129 & 1 & 1.10 & 1.29 & 1.40 & 1.62 & 2.71 \\ 
+   & 3 & 124 & 1 & 1.10 & 1.38 & 1.48 & 1.76 & 3.14 \\ 
+   \hline
+ & all &  & 1 & 1.10 & 1.33 & 1.43 & 1.67 & 3.14 \\ 
+   \hline
+PTSD & 1 & 118 & 1 & 1.06 & 1.35 & 1.48 & 1.69 & 3.29 \\ 
+   & 2 & 129 & 1 & 1.06 & 1.24 & 1.45 & 1.65 & 4.18 \\ 
+   & 3 & 124 & 1 & 1.06 & 1.29 & 1.49 & 1.72 & 4.06 \\ 
+   \hline
+ & all &  & 1 & 1.06 & 1.29 & 1.47 & 1.71 & 4.18 \\ 
+   \hline
+Functioning & 1 & 118 & 1 & 1.00 & 1.11 & 1.22 & 1.33 & 2.56 \\ 
+   & 2 & 129 & 1 & 1.00 & 1.11 & 1.21 & 1.22 & 2.67 \\ 
+   & 3 & 124 & 1 & 1.00 & 1.11 & 1.28 & 1.44 & 2.67 \\ 
+   \hline
+ & all &  & 1 & 1.00 & 1.11 & 1.24 & 1.33 & 2.67 \\ 
+   \hline
+Dis MH - anxious & 1 & 118 & 1 & 2.00 & 3.00 & 2.93 & 4.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 2.00 & 3.00 & 2.97 & 4.00 & 5.00 \\ 
+   & 3 & 124 & 1 & 2.00 & 3.00 & 2.96 & 4.00 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 2.95 & 4.00 & 5.00 \\ 
+   \hline
+Dis MH - depressed & 1 & 118 & 1 & 2.00 & 2.00 & 2.59 & 3.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 2.00 & 2.00 & 2.60 & 3.00 & 5.00 \\ 
+   & 3 & 123 & 1 & 2.00 & 2.00 & 2.67 & 3.50 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.62 & 3.00 & 5.00 \\ 
+   \hline
+Dis MH - avoid & 1 & 118 & 1 & 2.00 & 2.00 & 2.13 & 2.00 & 5.00 \\ 
+   & 2 & 129 & 1 & 2.00 & 2.00 & 2.26 & 2.00 & 4.00 \\ 
+   & 3 & 124 & 1 & 2.00 & 2.00 & 2.03 & 2.00 & 4.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 2.00 & 2.14 & 2.00 & 5.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics for time point 3 by location} 
+\label{}
+\end{longtable}
+\endgroup
+
+
